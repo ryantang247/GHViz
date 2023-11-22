@@ -1,70 +1,108 @@
 <!-- RepoInfo.vue -->
 
 <template>
-  <div>
-    <label>
-      Username:
-      <input v-model="username" />
-    </label>
-    <label>
-      Repository:
-      <input v-model="repo" />
-    </label>
-    <button @click="getFileContents">Fetch Repository Info</button>
+  <div class="container">
+    <div class="logo-container">
+      <!-- Place your logo here -->
+      <img src="./assets/company_logo.png" alt="Logo" class="logo" />
+    </div>
 
-    <div v-if="loading">Loading...</div>
-    <div v-else>
+    <div class="form-container">
+      <label>
+        Username:
+        <input v-model="username" />
+      </label>
+      <label>
+        Repository:
+        <input v-model="repo" />
+      </label>
+      <button @click="postDataToBackend">Fetch Repository Info</button>
+
+      <div v-if="loading">Loading...</div>
+      <div v-if="errorMessage != null">Error fetching data</div>
     </div>
-    <div v-if="errorMessage!=null">Error fetching data</div>
-    <div v-if="loaded">
-    <FileTree v-bind:file-tree="filePaths" />
+
+    <div class="visualization-container">
+      <!-- FileTree Component -->
+      <div>
+<!--        <FileTree v-for="(element, number) in this.data" :key="number" :treeMap="convertToFileTree(element.file_tree)" />-->
+        <FileTree :treeMap="convertToFileTree(this.rawFileTree)" />
+      </div>
     </div>
+
+    <GhAPI />
   </div>
-  <GhAPI/>
 </template>
-
 <script>
-import gql from 'graphql-tag';
 import FileTree from "@/components/FileTree.vue";
 import {Octokit} from "@octokit/rest";
 import GhAPI from "@/components/GitAPI.vue";
-
+import data from '@/output.json';
+import axios from "axios";
+axios.defaults.baseURL = process.env.VUE_APP_API_BASE_URL || 'http://127.0.0.1:5000'
 export default {
   components: {GhAPI, FileTree},
+
   // components: {FileTree},
   data() {
     return {
       // by default, all data types ret
       loaded : false,
       loading: false,
-      username: 'ShiqiYu',
-      repo: 'CPP',
+      username: 'TeamNewPipe',
+      repo: 'NewPipe',
+      rawFileTree: data[0].file_tree,
       filePaths: {},
       currentCommit : {},
       repository: {},
       errorMessage: null,
-      overall_tree: {}
+      overall_tree: {},
+      pullJSONData : "",
+      pullNumbers: []
     };
   },
+  devServer: {
+    devServer: {
+      proxy: {
+        '/send_repo': {
+          target: 'http://localhost:5000', // Replace with your Flask server address
+          changeOrigin: true,
+          ws: true,
+        },
+      },
+    },
+  },
   methods: {
-    handleCommitClick(commit) {
-      // Handle the click event for a commit
-      this.currentCommit = commit.oid
-      console.log('Clicked commit:', this.currentCommit);
+    postDataToBackend() {
+      const formData = new FormData();
+      formData.append('username', this.username); // Replace 'field1' with the actual field name
+      formData.append('repo', this.repo);
+      const data = new URLSearchParams(formData);
 
+      // Use Axios or another HTTP library to make a request to your Python backend
+      axios.post('/send_repo',  data)
+          .then(response => {
+            // Process the response from the backend
+            console.log(response.data);
+          })
+          .catch(error => {
+            // Handle errors
+            console.error(error);
+          });
     },
     async getFileContents() {
       this.loading = true;
       const octokit = new Octokit({
-        auth: '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'
+        auth: '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'
       })
 
       // const apiUrl = `https://api.github.com/repos/${this.username}/${this.repo}/contents/`;
 
       try {
-        const response = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=3', {
+        const response = await octokit.request('GET /repos/{owner}/{repo}/pulls/{pull_number}/commits}', {
           owner: this.username,
           repo: this.repo,
+          pull_number: this.pull_id,
           branch: 'main',
           headers: {
             'Accept': 'application/vnd.github.v3.raw', // This header indicates that you want the raw content
@@ -77,7 +115,10 @@ export default {
         console.log(content)
         this.loading = false;
         this.loaded  =true;
-        this.filePaths = this.buildDirectoryTree(content.tree);
+
+        // Processing data by getting pull requests id and puttting it in array, this is using pull id to get its respective commits
+        // this.pullJSONData = response.data
+        // this.pullNumbers = this.pullJSONData.map(item => item.number);
         return content;
 
         } catch{
@@ -86,110 +127,36 @@ export default {
         }
 
       },
-      buildDirectoryTree(files) {
-        const tree = {};
+    convertToFileTree(fileStructure) {
+      const root = { name: "root", children: [] };
 
-        files.forEach(file => {
-          const pathSegments = file.path.split('/');
-          let currentNode = tree;
+      fileStructure.forEach((path) => {
+        const parts = path.split('/');
+        let currentDir = root;
 
-          pathSegments.forEach(segment => {
-            currentNode[segment] = currentNode[segment] || {};
-            currentNode = currentNode[segment];
-          });
+        parts.forEach((part, index) => {
+          const isFile = index === parts.length - 1;
+          let node = currentDir.children.find((child) => child.name === part);
+
+          if (!node) {
+            // Node doesn't exist, create it
+            node = { name: part, value: isFile ? 1 : 0, children: [] };
+            currentDir.children.push(node);
+          }
+
+          if (isFile) {
+            // Increment size for files
+            node.value += 1;
+          }
+
+          currentDir = node;
         });
-
-        return tree;
-      },
-
-    updateTree(existingTree, filePath) {
-      const pathSegments = filePath.split('/');
-      let currentNode = existingTree;
-
-      // Traverse the existing tree based on the path segments
-      pathSegments.forEach(segment => {
-        currentNode[segment] = currentNode[segment] || {};
-        currentNode = currentNode[segment];
       });
 
-      // You can set additional properties or values to the final node if needed
-      currentNode.isModified = true;
-
-      return existingTree;
+      const result = JSON.stringify(root, null, 2)
+      // console.log(result)
+      return result;
     },
-
-    convertJSON (filePath){
-        const filePaths = filePath.map(item => item.path);
-        const output = {};
-
-        for (const path of filePaths) {
-          let current = output;
-          const segments = path.split('/').filter(segment => segment !== ''); // Filter out empty segments
-
-          for (const segment of segments) {
-            if (!(segment in current)) {
-              current[segment] = {};
-            }
-
-            current = current[segment];
-          }
-        }
-
-        return output;
-    },
-
-    async fetchRepositoryInfo() {
-      this.loading = true;
-
-      try {
-        // Execute the GraphQL query with dynamic variables
-        const result = await this.$apollo.query({
-          query: gql`
-            query ($owner: String!, $name: String!) {
-              repository(owner: $owner, name: $name) {
-                pullRequests(first: 100, states: [OPEN ,CLOSED, MERGED]) {
-                  nodes {
-                    title
-                    number
-                    state
-                    changedFiles
-                    files(first: 100) {
-                      nodes {
-                        path
-                        additions
-                        deletions
-
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          `,
-          variables: {
-            owner: "ryantang247",
-            name: "Dl-project",
-
-            // by default, the branch we use is main, edit this later
-            expression: "main"
-          },
-        });
-        // console.log(result.data.repository)
-        this.loaded = true
-        this.repository = result.data.repository;
-
-        // this.overall_tree = this.buildDirectoryTree()
-
-        // gets each commit
-        // this.fileStruct = result.data.repository.commits.target.history.edges
-        // console.log("File structure: ")
-        console.log((this.repository))
-      } catch (error) {
-        console.error('Error fetching repository info:', error);
-      } finally {
-        this.loading = false;
-      }
-    }
     },
 };
 </script>
@@ -201,5 +168,37 @@ export default {
   text-decoration: underline;
   margin-bottom: 5px;
 }
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+.logo-container {
+  margin-bottom: 20px;
+}
+
+.logo {
+  width: 500px; /* Adjust the width according to your logo size */
+  height: auto;
+}
+
+label{
+  font-family: "Bell MT",serif;
+}
+
+.form-container {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.visualization-container {
+  display: flex;
+  justify-content: space-around;
+  width: 100%;
+}
+
 /* Add more styles as needed */
 </style>
